@@ -808,6 +808,7 @@ name = "mpg-smoke-01"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dotenvy",
  "http",
  "serde",
  "serde_json",

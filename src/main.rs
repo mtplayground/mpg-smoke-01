@@ -6,8 +6,9 @@ mod state;
 
 use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::str::FromStr;
 
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -17,14 +18,19 @@ use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
+    dotenvy::from_filename(".env.production").ok();
     init_tracing();
 
-    let database_url = env::var("DATABASE_URL").map_err(|_| AppError::missing_env("DATABASE_URL"))?;
+    let database_url =
+        env::var("DATABASE_URL").map_err(|_| AppError::missing_env("DATABASE_URL"))?;
     let port = read_port()?;
+    let connect_options = PgConnectOptions::from_str(&database_url)
+        .map_err(|error| AppError::database_connection("parse DATABASE_URL", error.into()))?
+        .statement_cache_capacity(0);
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect_with(connect_options)
         .await
         .map_err(|error| AppError::database_connection("connect DATABASE_URL", error))?;
 
@@ -37,7 +43,7 @@ async fn main() -> Result<(), AppError> {
         .await
         .map_err(AppError::bind)?;
 
-    let router = build_router(AppState { pool });
+    let router = build_router(AppState::new(pool));
 
     tracing::info!("listening on 0.0.0.0:{port}");
     axum::serve(listener, router)
@@ -54,7 +60,9 @@ fn init_tracing() {
 
 fn read_port() -> Result<u16, AppError> {
     match env::var("PORT") {
-        Ok(raw) => raw.parse::<u16>().map_err(|_| AppError::invalid_env("PORT", raw)),
+        Ok(raw) => raw
+            .parse::<u16>()
+            .map_err(|_| AppError::invalid_env("PORT", raw)),
         Err(_) => Ok(8080),
     }
 }

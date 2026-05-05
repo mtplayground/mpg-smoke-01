@@ -93,7 +93,11 @@ impl IntoResponse for AppError {
             ),
             Self::Validation(message) => (StatusCode::BAD_REQUEST, message.into_owned()),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, message.into_owned()),
-            Self::Database { context, query, source } => {
+            Self::Database {
+                context,
+                query,
+                source,
+            } => {
                 tracing::error!(context, query, error = %source, "returning database error response");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
