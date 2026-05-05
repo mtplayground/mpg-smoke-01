@@ -1,121 +1,77 @@
-Architecture plan for `mtplayground/Alex-Hou-2024-test-2`
+Architecture plan for `mtplayground/mpg-smoke-01`
 
 Goal
-- Build a Vite + React + TypeScript scientific calculator with Zustand state, mathjs-backed evaluation, Tailwind + shadcn/ui styling, responsive history UI, keyboard support, tests, and Docker delivery.
+- Build a minimal Rust `axum` service backed by PostgreSQL with startup migrations, REST CRUD endpoints for `tasks`, and a production Docker image exposing port `8080`.
 
 Module structure
-- `src/app/`
-  - `App.tsx`: top-level responsive shell that renders calculator + history layout.
-  - `providers.tsx`: optional future provider composition if theme or test wrappers grow.
-- `src/components/calculator/`
-  - `Calculator.tsx`: main composition component.
-  - `Display.tsx`
-  - `BasicKeypad.tsx`
-  - `ScientificKeypad.tsx`
-  - `ModeToggle.tsx`
-  - `ThemeToggle.tsx`
-  - `CalculatorButton.tsx`: shared button wrapper over shadcn Button for label/action mapping.
-- `src/components/history/`
-  - `HistoryPanel.tsx`
-  - `HistoryEntry.tsx`
-- `src/components/ui/`
-  - shadcn-generated primitives, initially `button`, later `sheet`, `alert-dialog`, or `scroll-area` if needed.
-- `src/store/`
-  - `calculator-store.ts`: main Zustand store for expression/result/modes and calculator actions.
-  - `history-store.ts`: persisted history entries and recall helpers.
-  - `theme-store.ts`: persisted theme preference and system sync logic.
-  - `types.ts`: store-facing shared types.
-- `src/lib/`
-  - `evaluator.ts`: typed wrapper around mathjs evaluate pipeline.
-  - `expression-builder.ts`: pure token mutation helpers.
-  - `mathjs.ts`: mathjs instance/config isolation if custom imports or angle helpers are needed.
-  - `format.ts`: numeric/result formatting helpers.
-  - `constants.ts`: token lists, operator metadata, storage keys.
-- `src/hooks/`
-  - `useKeyboardShortcuts.ts`
-  - `useAutoShrinkText.ts`
-  - `usePrefersColorScheme.ts`
-- `src/types/`
-  - `calculator.ts`: domain types if they outgrow store-local `types.ts`.
-- `src/test/`
-  - `setup.ts`
-  - `utils.tsx`
-- `public/`
-  - static assets if any later become necessary.
+- `Cargo.toml`
+  - Runtime deps: `axum`, `tokio`, `serde`, `serde_json`, `sqlx`, `tracing`, `tracing-subscriber`.
+- `src/main.rs`
+  - Process bootstrap: load `DATABASE_URL`, initialize tracing, create the Postgres pool, run migrations, build the router, and bind the HTTP server on `0.0.0.0:8080`.
+- `src/app.rs`
+  - Router construction and shared application state wiring.
+- `src/state.rs`
+  - `AppState` holding the `sqlx::PgPool`.
+- `src/routes/tasks.rs`
+  - Handlers for `GET /tasks`, `POST /tasks`, `PATCH /tasks/:id`, and `DELETE /tasks/:id`.
+- `src/models/task.rs`
+  - Database row and API response types for tasks.
+- `src/models/request.rs`
+  - Request DTOs such as `CreateTaskRequest` and `UpdateTaskRequest`.
+- `src/error.rs`
+  - HTTP-facing error type with status mapping and SQL logging.
+- `migrations/`
+  - Startup SQL migration creating the `tasks` table if it does not exist.
+- `Dockerfile`
+  - Multi-stage build using `rust:1.82` as builder and `debian:bookworm-slim` as runtime.
 
-Shared types
-- `AngleMode = 'deg' | 'rad'`
-- `ThemeMode = 'light' | 'dark' | 'system'`
-- `CalculatorMode = 'basic' | 'scientific'`
-- `EvaluationResult = { value: string | null; error: string | null }`
-- `HistoryEntry = { expression: string; result: string; timestamp: string }`
-- `CalculatorState`
-  - `expression: string`
-  - `displayValue: string`
-  - `lastResult: string | null`
-  - `calculatorMode: CalculatorMode`
-  - `angleMode: AngleMode`
-- Action contracts should stay string-based at the UI boundary so buttons and keyboard events share one token dispatch path.
+File organization and shared types
+- Keep route handlers thin.
+  - Parse input, call one SQL statement, map output to JSON.
+- Keep data contracts explicit.
+  - `Task { id: i64, title: String, completed: bool }`
+  - `CreateTaskRequest { title: String }`
+  - `UpdateTaskRequest { completed: bool }`
+- Use one shared application state.
+  - `AppState { pool: PgPool }`
+- Prefer `sqlx::query_as!` or `FromRow`-based typed mapping so SQL and Rust types stay aligned.
+
+Request flow
+- Startup
+  - Read `DATABASE_URL`.
+  - Initialize tracing.
+  - Connect `PgPool`.
+  - Run migrations before accepting traffic.
+  - Build router with shared state.
+- `GET /tasks`
+  - Select all tasks ordered by `id`.
+- `POST /tasks`
+  - Validate non-empty `title`, insert row, return created task.
+- `PATCH /tasks/:id`
+  - Update `completed`, return updated task, map missing row to `404`.
+- `DELETE /tasks/:id`
+  - Delete by `id`, return `204`, map missing row to `404`.
+
+Dependencies between issues
+- External issue dependencies: none listed. This repository currently has one implementation issue.
+- Internal build order inside issue `#7`:
+  - Bootstrap crate and dependencies.
+  - Add migration and startup connection flow.
+  - Add task models and handlers.
+  - Add Docker packaging once the runtime shape is stable.
 
 Key design decisions
-- Keep evaluation and expression mutation separate.
-  - `expression-builder` stays pure and UI-agnostic.
-  - `evaluator` is the only place that knows about mathjs quirks, angle conversion, and unsafe-expression handling.
-- Use a string expression model, not a token array store.
-  - Simpler persistence, recall, keyboard mapping, and display rendering.
-  - Builder helpers can still parse the current tail to prevent invalid operator sequences and preserve balanced parentheses awareness.
-- Split Zustand stores by responsibility instead of one monolith.
-  - Calculator state changes frequently and should stay transient.
-  - History and theme need persistence and independent testing.
-- Keep button definitions data-driven.
-  - Shared button config arrays allow keypad rendering, keyboard highlight lookup, ARIA labeling, and future layout changes without duplicating logic.
-- Prefer DOM class application for theme.
-  - Theme store should resolve `system` to an effective theme and apply/remove `dark` on `<html>`.
-- Treat issue 21 as integration tests inside Vitest/jsdom unless real browser E2E is explicitly added later.
-  - The issue asks for “Vitest + Testing Library tests”, so smoke coverage should remain in that stack unless requirements change.
-
-Issue dependency map
-- Foundation
-  - `#1` Vite + React + TS bootstrap
-  - `#2` Tailwind + shadcn/ui
-  - `#3` ESLint + Prettier + Vitest
-  - `#4` env handling
-  - `#5` Docker + nginx
-- Domain logic
-  - `#6` evaluator
-  - `#7` expression builder
-  - `#8` tests for evaluator + builder
-- State
-  - `#9` calculator store
-  - `#10` history store
-  - `#11` theme store
-  - `#12` store tests
-- UI
-  - `#13` display
-  - `#14` basic keypad
-  - `#15` scientific keypad
-  - `#16` calculator layout, mode toggle, theme switcher
-  - `#17` history panel
-  - `#18` app-level responsive integration
-  - `#19` keyboard handler
-  - `#20` accessibility pass
-- Verification and docs
-  - `#21` smoke tests
-  - `#22` README + Docker verification
-
-Recommended execution order
-- `#1 -> #2 -> #3 -> #4 -> #5`
-- `#6 -> #7 -> #8`
-- `#9 -> #10 -> #11 -> #12`
-- `#13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20`
-- `#21 -> #22`
-
-Cross-issue notes
-- `#3` should include `src/test/setup.ts` early so all later tests share one harness.
-- `#6` should expose deterministic error messages because `#8`, `#9`, and UI display behavior will depend on them.
-- `#9` should own action orchestration by delegating expression edits to `expression-builder` and evaluation to `evaluator`; UI components should not reproduce business logic.
-- `#10` recall behavior should feed back into the calculator store via a stable API, likely by exposing `setExpression` or `loadHistoryEntry`.
-- `#11` should establish the CSS variable contract expected by `#2` and the theme toggle in `#16`.
-- `#19` should reuse the same button config identifiers from `#14` and `#15` so keyboard highlight state is not hardcoded twice.
-- `#20` should be deferred until the full layout exists, but ARIA labels should be added incrementally during keypad work to minimize rework.
-- `#22` depends on both docs and an actual successful production image build/run, so keep Docker decisions minimal and standard in `#5`.
+- Run SQL migrations at startup rather than requiring a separate deployment step.
+  - This matches the issue requirement and keeps local and container startup behavior identical.
+- Keep the schema minimal and authoritative in migrations.
+  - `id SERIAL PRIMARY KEY`
+  - `title TEXT NOT NULL`
+  - `completed BOOLEAN NOT NULL DEFAULT FALSE`
+- Use a pooled Postgres connection shared through `axum` state.
+  - Simple concurrency model and no custom repository layer needed for this scope.
+- Centralize SQL error handling.
+  - Log database failures with `tracing` and return stable HTTP errors.
+- Return full task rows from mutating endpoints.
+  - This keeps the frontend contract simple and avoids follow-up fetches after create or toggle.
+- Bind the service directly to port `8080`.
+  - Aligns local runs and container runs with the issue requirements.
