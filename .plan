@@ -1,77 +1,67 @@
 Architecture plan for `mtplayground/mpg-smoke-01`
 
-Goal
-- Build a minimal Rust `axum` service backed by PostgreSQL with startup migrations, REST CRUD endpoints for `tasks`, and a production Docker image exposing port `8080`.
+Issue scope
+- Issue `#78`: add a Rust `axum` service backed by PostgreSQL.
+- Required schema: `bookmarks(id serial, url text not null, title text)`.
+- Required endpoints: `POST /bookmarks` and `GET /bookmarks`.
+- Database access must use `sqlx` and `DATABASE_URL`.
 
 Module structure
 - `Cargo.toml`
-  - Runtime deps: `axum`, `tokio`, `serde`, `serde_json`, `sqlx`, `tracing`, `tracing-subscriber`.
+  - Dependencies: `axum`, `tokio`, `serde`, `serde_json`, `sqlx`, `tracing`, `tracing-subscriber`.
 - `src/main.rs`
-  - Process bootstrap: load `DATABASE_URL`, initialize tracing, create the Postgres pool, run migrations, build the router, and bind the HTTP server on `0.0.0.0:8080`.
+  - Startup: load `DATABASE_URL`, initialize tracing, connect `PgPool`, run migrations, build router, bind HTTP server.
 - `src/app.rs`
-  - Router construction and shared application state wiring.
+  - Router construction and route registration.
 - `src/state.rs`
-  - `AppState` holding the `sqlx::PgPool`.
-- `src/routes/tasks.rs`
-  - Handlers for `GET /tasks`, `POST /tasks`, `PATCH /tasks/:id`, and `DELETE /tasks/:id`.
-- `src/models/task.rs`
-  - Database row and API response types for tasks.
+  - Shared `AppState` containing the Postgres pool.
+- `src/routes/bookmarks.rs`
+  - `POST /bookmarks` and `GET /bookmarks` handlers.
+- `src/models/bookmark.rs`
+  - DB row and API response types for bookmarks.
 - `src/models/request.rs`
-  - Request DTOs such as `CreateTaskRequest` and `UpdateTaskRequest`.
+  - Request DTOs such as `CreateBookmarkRequest`.
 - `src/error.rs`
-  - HTTP-facing error type with status mapping and SQL logging.
+  - HTTP error mapping and shared application error type.
 - `migrations/`
-  - Startup SQL migration creating the `tasks` table if it does not exist.
-- `Dockerfile`
-  - Multi-stage build using `rust:1.82` as builder and `debian:bookworm-slim` as runtime.
+  - SQL migration that creates the `bookmarks` table if it does not already exist.
 
 File organization and shared types
-- Keep route handlers thin.
-  - Parse input, call one SQL statement, map output to JSON.
-- Keep data contracts explicit.
-  - `Task { id: i64, title: String, completed: bool }`
-  - `CreateTaskRequest { title: String }`
-  - `UpdateTaskRequest { completed: bool }`
-- Use one shared application state.
+- Keep handlers thin and database-focused for this scope.
+- Shared state:
   - `AppState { pool: PgPool }`
-- Prefer `sqlx::query_as!` or `FromRow`-based typed mapping so SQL and Rust types stay aligned.
+- Core types:
+  - `Bookmark { id: i64, url: String, title: Option<String> }`
+  - `CreateBookmarkRequest { url: String, title: Option<String> }`
+- Prefer typed `sqlx` mapping so query results stay aligned with Rust structs.
 
 Request flow
 - Startup
   - Read `DATABASE_URL`.
-  - Initialize tracing.
-  - Connect `PgPool`.
-  - Run migrations before accepting traffic.
-  - Build router with shared state.
-- `GET /tasks`
-  - Select all tasks ordered by `id`.
-- `POST /tasks`
-  - Validate non-empty `title`, insert row, return created task.
-- `PATCH /tasks/:id`
-  - Update `completed`, return updated task, map missing row to `404`.
-- `DELETE /tasks/:id`
-  - Delete by `id`, return `204`, map missing row to `404`.
+  - Initialize logging.
+  - Create `PgPool`.
+  - Run migrations before serving traffic.
+  - Build the `axum` router with shared state.
+- `POST /bookmarks`
+  - Validate non-empty `url`.
+  - Insert a row and return the created bookmark.
+- `GET /bookmarks`
+  - Select bookmarks ordered by `id` and return JSON.
 
 Dependencies between issues
-- External issue dependencies: none listed. This repository currently has one implementation issue.
-- Internal build order inside issue `#7`:
-  - Bootstrap crate and dependencies.
-  - Add migration and startup connection flow.
-  - Add task models and handlers.
-  - Add Docker packaging once the runtime shape is stable.
+- No cross-issue dependencies are currently listed.
+- Internal implementation order for issue `#78`:
+  - Bootstrap the Rust crate and dependencies.
+  - Add migration and database startup wiring.
+  - Add shared state, models, and error handling.
+  - Implement the two bookmark endpoints.
 
 Key design decisions
-- Run SQL migrations at startup rather than requiring a separate deployment step.
-  - This matches the issue requirement and keeps local and container startup behavior identical.
-- Keep the schema minimal and authoritative in migrations.
+- Run migrations at startup to keep local and deployed startup paths the same.
+- Keep the schema minimal and match the issue exactly:
   - `id SERIAL PRIMARY KEY`
-  - `title TEXT NOT NULL`
-  - `completed BOOLEAN NOT NULL DEFAULT FALSE`
-- Use a pooled Postgres connection shared through `axum` state.
-  - Simple concurrency model and no custom repository layer needed for this scope.
-- Centralize SQL error handling.
-  - Log database failures with `tracing` and return stable HTTP errors.
-- Return full task rows from mutating endpoints.
-  - This keeps the frontend contract simple and avoids follow-up fetches after create or toggle.
-- Bind the service directly to port `8080`.
-  - Aligns local runs and container runs with the issue requirements.
+  - `url TEXT NOT NULL`
+  - `title TEXT`
+- Use a single shared `PgPool` in application state.
+- Avoid adding a repository abstraction unless later issues require it.
+- Return created rows from `POST /bookmarks` so clients do not need an immediate follow-up read.
